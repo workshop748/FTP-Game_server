@@ -3,12 +3,13 @@ import os
 from _thread import *
 import random
 import csv
-from Crypto.Protocol.KDf import scrypt
+from Crypto.Protocol.KDF import scrypt
+from Crypto.Random import get_random_bytes
 import base64
 
 # this is uses to create an object of the different users that are present.
 class FTPUser:
-    def __init__(self, username, password_hash,salt,hint1, hint2, home_dir):
+    def __init__(self, username, password_hash,salt,hint1, hint2, home_dir,root_dir):
            self.username = username
            self.password_hash =password_hash
            self.salt =salt
@@ -16,12 +17,20 @@ class FTPUser:
            self.hint2 = hint2
            self.home_dir =home_dir
            self.current_dir = home_dir
+           self.root_dir = root_dir
 
+def initialize_root_directory(root_path):
+    if not os.path.exists(root_path):
+        os.makedirs(root_path)
+    print(f"Root directory {root_path} initialized.")
+    return root_path
 def hash_password(password, salt):
     ## hashes the password
     return scrypt(password,salt, 32,n=2**14, r=8, p=1)
-      
-def Load_users_from_csv(filename):
+    
+def generate_salt():
+    return get_random_bytes(16)
+def Load_users_from_csv(filename,root_dir):
     users = {}
     try:
         with open(filename, "r") as file:
@@ -30,9 +39,19 @@ def Load_users_from_csv(filename):
                 if len(row) >= 6:
                     salt = base64.b64decode(row[2].encode())
                     hash_password =base64.b64secode(row[3].encode())
+                    home_dir = os.path.join(root_dir, row[4])
+                    
+                    if not os.path.exists(home_dir):
+                        os.makedirs(home_dir)
+
                     users[row[0]] =FTPUser(row[0],hash_password,salt,row[3],row[4],row[5],row[6])
     except FileNotFoundError:
         print(f" Waring: user database {filename} not found. Using anonymous accesss only")
+        
+        anon_dir = os.path.join(root_dir, "anonymous")
+        if not os.path.exists(anon_dir):
+            os.makedirs(anon_dir)
+        salt = generate_salt()
         users['anonymous'] = FTPUser('anonymous', b'',salt,'','', os.getcwd())
     return users
 
@@ -57,8 +76,11 @@ def searching_pass(username,password,users):
         return None,False
     return user,True
 
-    
-
+def is_path_safe(user,requested_path):
+    # this will check if the path is safe to access
+    requested_abs = os.path.abspath(os.path.join(user.current_dir,requested_path))
+    root_abs = os.path.abspath(user.root_dir)
+    return requested_abs.startswith(root_abs)
 def FTPProcess(client_socket,users):
     # handling the normal ftp enter a command request
    while 1:
@@ -74,53 +96,59 @@ def FTPProcess(client_socket,users):
 
     #handling the commands given by the client
         if command == 'SYST':
-            client_socket.send("Windows 11".encode())
+            client_socket.send("CommandResponce-Windows 11".encode())
         elif command == 'PWD':
             client_socket.send(f"{users.current_dir}".encode())
         elif command == 'CWD':
             if args:
+                if not is_path_safe(users, args[0]):
+                    client_socket.send("CommandResponce-Permission denied".encode())
+                    continue
                 new_dir = os.path.join(users.curret_dir, args[0])
                 if os.path.isdir(new_dir):
                     users.current_dir =new_dir
-                    client_socket.send("Directory changed".encode())
+                    client_socket.send("CommandResponce-Directory changed".encode())
                 else:
-                    client_socket.send(" Directory not found".encode())
+                    client_socket.send("CommandResponce-Directory not found".encode())
             else:
-                client_socket.send("Syntax error in parameters".encode())
+                client_socket.send("CommandResponce-Syntax error in parameters".encode())
         elif command == 'LIST':
             try:
                 files=os.listdir(users.current_dr)
                 listing="\r\n".join(files)
-                client_socket.send(" here comes the directory listing".encode())
+                client_socket.send(" CommandResponce-here comes the directory listing".encode())
                 client_socket.send(listing.encode()+b"\r\n")
-                client_socket.send("Directory send Okay".encode())
+                client_socket.send("CommandResponce-Directory send OK".encode())
             except Exception as e:
                     client_socket.send(str(e).encode())
         elif  command == 'RETR':
             if args:
+              if not is_path_safe(users, args[0]):
+                    client_socket.send("CommandResponce-Permission denied".encode())
+                    continue
               file_path = os.path.join(users.current_dir, args[0])
               if os.path.isfile(file_path):
                   try:
                     with open(file_path,'rb') as f:
-                      client_socket.send("opening A BINARY mode data connection".encode())
+                      client_socket.send("CommandResponce-opening A BINARY mode data connection".encode())
                       client_socket.sendall(f.read())
-                      client_socket.send("transfer complete".encode())
+                      client_socket.send("CommandResponce-transfer complete".encode())
                   except Exception as e:
                       client_socket.send(str(e).encode())
               else:
-                   client_socket.send("Syntax error in parameters".encode())
+                   client_socket.send("CommandResponce-Syntax error in parameters".encode())
         elif command == 'QUIT':
-           client_socket.send("Goodbye".encode())
+           client_socket.send("CommandResponce-Goodbye".encode())
            break
         else:
-         client_socket.send(" Command not implemented".encode())
+         client_socket.send("CommandResponce-Command not implemented".encode())
     except Exception as e:
         print(f"Error handling command :{e}")
         break
     
                        
-def FTP_server(cleint_socket):
-    users = Load_users_from_csv("theUsers.csv")
+def FTP_server(cleint_socket,root_dir):
+    users = Load_users_from_csv("theUsers.csv",root_dir)
     # this will handle the start of the client socket for logging int
     # sending a login  in request for the users
     login_request = "AuthRequest-Request"
@@ -140,10 +168,13 @@ def FTP_server(cleint_socket):
             if command == 'USER':
                 username = args[0] if args else ''
                 if username in users:  
-                        cleint_socket.send(f" Password required for {username}\r\n".encode())
+                        cleint_socket.send(f"AuthRequest-Password required for {username}\r\n".encode())
 
                         data =cleint_socket.recv(1024).decode().strip()
-                        pass_command, *pass_args = data.split('-')
+                        if '-' in data:
+                            pass_command, *pass_args = data.split('-')
+                        else:
+                            pass_command, *pass_args = data.split()
                         if pass_command.upper() == 'PASS':
                             password = pass_args[0] if pass_args else ''
                            
@@ -181,6 +212,9 @@ def main():
     #handling the inital  server set up
     serverIP = "127.0.0.1"
     port = 2121
+    root_dir ="/ftp/"
+    root_Direcotry = os.path.abspath(root_dir)
+    initialize_root_directory(root_Direcotry)
     try:
 
         Server_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
@@ -190,7 +224,7 @@ def main():
         while 1:
             clientConnection,addr = Server_socket.accept()
             print(f" there is a new connection from {addr}")
-            start_new_thread(FTP_server,(clientConnection,))
+            start_new_thread(FTP_server,(clientConnection,root_dir,))
     except KeyboardInterrupt:
             print("\nShutting down server ...")
     finally:
