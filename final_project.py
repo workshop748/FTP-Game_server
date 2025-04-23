@@ -85,7 +85,7 @@ def FTPProcess(client_socket,users):
     # handling the normal ftp enter a command request
    while 1:
     try:
-        client_socket.send("CommandRequst-Please\tenter\ta\tcommand\t")
+        client_socket.send("CommandRequst-Please\tenter\ta\tcommand\t".encode())
         data =client_socket.recv(1024).decode()
 
         if not data:
@@ -98,7 +98,7 @@ def FTPProcess(client_socket,users):
         if command == 'SYST':
             client_socket.send("CommandResponce-Windows 11".encode())
         elif command == 'PWD':
-            client_socket.send(f"{users.current_dir}".encode())
+            client_socket.send(f"CommandRespoce-{users.current_dir}".encode())
         elif command == 'CWD':
             if args:
                 if not is_path_safe(users, args[0]):
@@ -149,6 +149,7 @@ def FTPProcess(client_socket,users):
                        
 def FTP_server(cleint_socket,root_dir):
     users = Load_users_from_csv("theUsers.csv",root_dir)
+    login_attempts = {} 
     # this will handle the start of the client socket for logging int
     # sending a login  in request for the users
     login_request = "AuthRequest-Request"
@@ -156,6 +157,8 @@ def FTP_server(cleint_socket,root_dir):
     # the server is waiting for the user name to get a request
     # format of the request AuthRequest-Response-UserName-Response
     try:
+        client_ip = cleint_socket.getpeername()[0]
+        login_attempts[client_ip] =login_attempts.get(client_ip, 0)
         while True:
             data =cleint_socket.recv(1024).decode()
 
@@ -169,14 +172,17 @@ def FTP_server(cleint_socket,root_dir):
                 username = args[0] if args else ''
                 if username in users:  
                         cleint_socket.send(f"AuthRequest-Password required for {username}\r\n".encode())
-
-                        data =cleint_socket.recv(1024).decode().strip()
-                        if '-' in data:
+                        ## Getting the password for the password.
+                        while 1:
+                         data =cleint_socket.recv(1024).decode().strip()
+                         if '-' in data:
                             pass_command, *pass_args = data.split('-')
-                        else:
+                         else:
                             pass_command, *pass_args = data.split()
-                        if pass_command.upper() == 'PASS':
+                         if pass_command.upper() == 'PASS':
                             password = pass_args[0] if pass_args else ''
+                            if password == "END":
+                                break
                            
                             user,success = searching_pass(username, password,users)
                             if success:
@@ -185,15 +191,21 @@ def FTP_server(cleint_socket,root_dir):
                                 break
                             else:
                                 user_obj = users.get(username)
-                                if user_obj:
-                                    hint = random.choice([user_obj.hint1,user_obj.hint2])
-                                    cleint_socket.send(f"AuthRequest-incorect-{hint}".encode())
+                                attempt_count = login_attempts.get(client_ip,1)
+                                if attempt_count ==1 :
+                                    hint - user_obj.hint1 if user_obj else ""
+                                elif attempt_count ==2:
+                                    hint = user_obj.hint2 if user_obj else ""
                                 else:
-                                    cleint_socket.send("AuthRequest-incorect".encode())
-                                break
+                                    hint = ""
+                                if hint:
+                                    cleint_socket.send(f"AuthRequest-incorrect-{hint}".encode())
+                                else:
+                                    cleint_socket.send(f"AuthRequest-incorrect:{attempt_count}".encode())
+                                
                         else:
                             cleint_socket.send("AuthRequest-login in with user first".encode())
-                            break
+                            
                 else:
                       cleint_socket.send("AuthRequest-User not found".encode())
    
