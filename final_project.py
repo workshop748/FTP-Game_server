@@ -150,6 +150,7 @@ def FTPProcess(client_socket,users):
 def FTP_server(cleint_socket,root_dir):
     users = Load_users_from_csv("theUsers.csv",root_dir)
     login_attempts = {} 
+    max_attempts = 5
     # this will handle the start of the client socket for logging int
     # sending a login  in request for the users
     login_request = "AuthRequest-Request"
@@ -158,7 +159,7 @@ def FTP_server(cleint_socket,root_dir):
     # format of the request AuthRequest-Response-UserName-Response
     try:
         client_ip = cleint_socket.getpeername()[0]
-        login_attempts[client_ip] =login_attempts.get(client_ip, 0)
+        login_attempts[client_ip] =0
         while True:
             data =cleint_socket.recv(1024).decode()
 
@@ -191,17 +192,21 @@ def FTP_server(cleint_socket,root_dir):
                                 break
                             else:
                                 user_obj = users.get(username)
-                                attempt_count = login_attempts.get(client_ip,1)
-                                if attempt_count ==1 :
+                                login_attempts[client_ip] += 1
+                                if login_attempts[client_ip]>= max_attempts:
+                                    cleint_socket.send("AuthRequest-Max Attempts reached".encode())
+                                    break
+                                hint = ""
+                                if login_attempts[client_ip]  ==1 :
                                     hint = user_obj.hint1 if user_obj else ""
-                                elif attempt_count ==2:
+                                elif login_attempts[client_ip]  ==2:
                                     hint = user_obj.hint2 if user_obj else ""
                                 else:
                                     hint = ""
                                 if hint:
                                     cleint_socket.send(f"AuthRequest-incorrect-{hint}".encode())
                                 else:
-                                    cleint_socket.send(f"AuthRequest-incorrect:{attempt_count}".encode())
+                                    cleint_socket.send(f"AuthRequest-incorrect".encode())
                                 
                         else:
                             cleint_socket.send("AuthRequest-login in with user first".encode())
