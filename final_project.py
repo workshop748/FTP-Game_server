@@ -38,13 +38,13 @@ def Load_users_from_csv(filename,root_dir):
             for row in reader:
                 if len(row) >= 6:
                     salt = base64.b64decode(row[2].encode())
-                    hash_password =base64.b64secode(row[3].encode())
+                    hash_password =base64.b64decode(row[3].encode())
                     home_dir = os.path.join(root_dir, row[4])
                     
                     if not os.path.exists(home_dir):
                         os.makedirs(home_dir)
 
-                    users[row[0]] =FTPUser(row[0],hash_password,salt,row[3],row[4],row[5],row[6])
+                    users[row[0]] =FTPUser(row[0],hash_password,salt,row[3],row[4],home_dir,root_dir)
     except FileNotFoundError:
         print(f" Waring: user database {filename} not found. Using anonymous accesss only")
         
@@ -52,7 +52,7 @@ def Load_users_from_csv(filename,root_dir):
         if not os.path.exists(anon_dir):
             os.makedirs(anon_dir)
         salt = generate_salt()
-        users['anonymous'] = FTPUser('anonymous', b'',salt,'','', os.getcwd())
+        users['anonymous'] = FTPUser('anonymous', b'',salt,'','', anon_dir,root_dir)
     return users
 
 def searching_pass(username,password,users):
@@ -85,7 +85,7 @@ def FTPProcess(client_socket,users):
     # handling the normal ftp enter a command request
    while 1:
     try:
-        client_socket.send("CommandRequst-Please\tenter\ta\tcommand\t".encode())
+        client_socket.send("CommandRequst-Please enter a command".encode())
         data =client_socket.recv(1024).decode()
 
         if not data:
@@ -104,7 +104,7 @@ def FTPProcess(client_socket,users):
                 if not is_path_safe(users, args[0]):
                     client_socket.send("CommandResponce-Permission denied".encode())
                     continue
-                new_dir = os.path.join(users.curret_dir, args[0])
+                new_dir = os.path.join(users.current_dir, args[0])
                 if os.path.isdir(new_dir):
                     users.current_dir =new_dir
                     client_socket.send("CommandResponce-Directory changed".encode())
@@ -114,13 +114,13 @@ def FTPProcess(client_socket,users):
                 client_socket.send("CommandResponce-Syntax error in parameters".encode())
         elif command == 'LIST':
             try:
-                files=os.listdir(users.current_dr)
+                files=os.listdir(users.current_dir)
                 listing="\r\n".join(files)
                 client_socket.send(" CommandResponce-here comes the directory listing".encode())
                 client_socket.send(listing.encode()+b"\r\n")
                 client_socket.send("CommandResponce-Directory send OK".encode())
             except Exception as e:
-                    client_socket.send(str(e).encode())
+                    client_socket.send(f"CommandResponse-Error: {str(e)}".encode())
         elif  command == 'RETR':
             if args:
               if not is_path_safe(users, args[0]):
@@ -186,14 +186,14 @@ def FTP_server(cleint_socket,root_dir):
                            
                             user,success = searching_pass(username, password,users)
                             if success:
-                                cleint_socket.send("AuthRequest-Sucess".encode())
+                                cleint_socket.send("AuthRequest-Success".encode())
                                 FTPProcess(cleint_socket,user)
                                 break
                             else:
                                 user_obj = users.get(username)
                                 attempt_count = login_attempts.get(client_ip,1)
                                 if attempt_count ==1 :
-                                    hint - user_obj.hint1 if user_obj else ""
+                                    hint = user_obj.hint1 if user_obj else ""
                                 elif attempt_count ==2:
                                     hint = user_obj.hint2 if user_obj else ""
                                 else:
